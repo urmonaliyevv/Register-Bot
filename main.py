@@ -141,8 +141,118 @@ def get_admin_menu():
 # HANDLERS
 # =========================
 
+@dp.message(Command("start"))
+async def cmd_start(message: types.Message):
+    execute_query("INSERT OR IGNORE INTO users (telegram_id) VALUES (?)", (message.from_user.id,))
+    await message.answer(TEXTS['uz']['welcome'], reply_markup=get_lang_keyboard())
 
 
+@dp.callback_query(F.data.startswith("lang_"))
+async def set_language(callback: types.CallbackQuery):
+    lang = callback.data.split("_")[1]
+    execute_query("UPDATE users SET lang=? WHERE telegram_id=?", (lang, callback.from_user.id))
+    await callback.message.delete()
+    await callback.message.answer(TEXTS[lang]['main_menu'], reply_markup=get_main_menu(callback.from_user.id, lang))
+
+
+# --- REGISTRATION ---
+@dp.message(F.text.in_([TEXTS['uz']['reg'], TEXTS['kz']['reg']]))
+async def start_reg(message: types.Message, state: FSMContext):
+    user = execute_query("SELECT lang FROM users WHERE telegram_id=?", (message.from_user.id,), fetchone=True)
+    lang = user[0] if user else 'uz'
+    await message.answer(TEXTS[lang]['enter_name'], reply_markup=ReplyKeyboardRemove())
+    await state.update_data(lang=lang)
+    await state.set_state(Register.name)
+
+
+@dp.message(Register.name)
+async def reg_name(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    lang = data['lang']
+    await state.update_data(name=message.text)
+    kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=TEXTS[lang]['phone_btn'], request_contact=True)]],
+                             resize_keyboard=True)
+    await message.answer(TEXTS[lang]['send_phone'], reply_markup=kb)
+    await state.set_state(Register.phone)
+
+
+@dp.message(Register.phone, F.contact | F.text)
+async def reg_phone(message: types.Message, state: FSMContext):
+    num = message.contact.phone_number if message.contact else message.text
+    data = await state.get_data()
+    lang = data['lang']
+    await state.update_data(phone=num)
+
+    courses = execute_query("SELECT name FROM courses", fetchall=True)
+    if not courses:
+        return await message.answer(TEXTS[lang]['no_courses'], reply_markup=get_main_menu(message.from_user.id, lang))
+
+    builder = InlineKeyboardBuilder()
+    for c in courses: builder.row(InlineKeyboardButton(text=c[0], callback_data=f"c_{c[0]}"))
+    await message.answer(TEXTS[lang]['select_course'], reply_markup=builder.as_markup())
+    await state.set_state(Register.course)
+
+
+@dp.callback_query(Register.course, F.data.startswith("c_"))
+async def reg_done(callback: types.CallbackQuery, state: FSMContext):
+    c_name = callback.data.split("_")[1]
+    data = await state.get_data()
+    lang = data['lang']
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    execute_query("UPDATE users SET name=?, phone=?, course=?, date=? WHERE telegram_id=?",
+                  (data['name'], data['phone'], c_name, now, callback.from_user.id))
+
+    await callback.message.delete()
+    await callback.message.answer(TEXTS[lang]['success_reg'], reply_markup=get_main_menu(callback.from_user.id, lang))
+
+    admin_txt = TEXTS[lang]['admin_msg'].format(name=data['name'], phone=data['phone'], course=c_name)
+    await bot.send_message(ADMIN_ID, admin_txt)
+    await state.clear()
+
+
+# --- COURSES ---
+@dp.message(F.text.in_([TEXTS['uz']['courses'], TEXTS['kz']['courses']]))
+async def show_courses(message: types.Message):
+    user = execute_query("SELECT lang FROM users WHERE telegram_id=?", (message.from_user.id,), fetchone=True)
+    lang = user[0] if user else 'uz'
+    courses = execute_query("SELECT id, name FROM courses", fetchall=True)
+    if not courses: return await message.answer(TEXTS[lang]['no_courses'])
+
+    builder = InlineKeyboardBuilder()
+    for c in courses: builder.row(InlineKeyboardButton(text=f"📖 {c[1]}", callback_data=f"inf_{c[0]}"))
+    await message.answer(TEXTS[lang]['courses'], reply_markup=builder.as_markup())
+
+@dp.callback_query(F.data.startswith("inf_"))
+async def course_info(callback: types.CallbackQuery):
+    user = execute_query("SELECT lang FROM users WHERE telegram_id=?", (callback.from_user.id,), fetchone=True)
+    lang = user[0] if user else 'uz'
+    c_id = callback.data.split("_")[1]
+    res = execute_query("SELECT name, description FROM courses WHERE id=?", (c_id,), fetchone=True)
+
+    builder = InlineKeyboardBuilder()
+    if callback.from_user.id == ADMIN_ID:
+        builder.row(InlineKeyboardButton(text="🗑 O'chirish / Өшіру", callback_data=f"del_{c_id}"))
+    builder.row(InlineKeyboardButton(text=TEXTS[lang]['back'], callback_data="go_back"))
+
+    if res:
+        await callback.message.edit_text(f"📚 *{res[0]}*\n\n{res[1]}", parse_mode="Markdown",
+                                         reply_markup=builder.as_markup())
+
+
+@dp.callback_query(F.data == "go_back")
+async def go_back(callback: types.CallbackQuery):
+    await callback.message.delete()
+    await show_courses(callback.message)
+
+
+@dp.callback_query(F.data.startswith("del_"), F.from_user.id == ADMIN_ID)
+async def delete_course(callback: types.CallbackQuery):
+    c_id = callback.data.split("_")[1]
+    execute_query("DELETE FROM courses WHERE id=?", (c_id,))
+    await callback.answer("✅ Kurs o'chirildi!", show_alert=True)
+    await callback.message.delete()
+    await show_courses(callback.message)
 
 # --- ADMIN PANEL ---
 
