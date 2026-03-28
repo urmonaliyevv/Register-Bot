@@ -257,6 +257,92 @@ async def delete_course(callback: types.CallbackQuery):
 # --- ADMIN PANEL ---
 
 
+@dp.message(F.text == "🛠 Admin Panel", F.from_user.id == ADMIN_ID)
+async def admin_panel(message: types.Message):
+    await message.answer("Admin boshqaruv paneli:", reply_markup=get_admin_menu())
+
+
+@dp.message(F.text == "📚 Kurslarni boshqarish", F.from_user.id == ADMIN_ID)
+async def admin_manage(message: types.Message):
+    await show_courses(message)
+
+
+@dp.message(F.text == "⬅️ Tilni o'zgartirish")
+async def change_lang_admin(message: types.Message):
+    await message.answer("Tilni tanlang:", reply_markup=get_lang_keyboard())
+
+
+@dp.message(F.text == "📊 Statistika", F.from_user.id == ADMIN_ID)
+async def admin_stats(message: types.Message):
+    count = execute_query("SELECT COUNT(*) FROM users WHERE name IS NOT NULL", fetchone=True)[0]
+
+    # Excel yaratish
+    with sqlite3.connect("database.db") as conn:
+        df = pd.read_sql_query("SELECT name, phone, course, date FROM users WHERE name IS NOT NULL", conn)
+        file_path = "users_list.xlsx"
+        df.to_excel(file_path, index=False)
+
+    file = FSInputFile(file_path)
+    await message.answer_document(file, caption=f"📊 Jami ro'yxatdan o'tganlar: {count}")
+    if os.path.exists(file_path): os.remove(file_path)
+
+
+@dp.message(F.text == "📢 Xabar yuborish", F.from_user.id == ADMIN_ID)
+async def start_broadcast(message: types.Message, state: FSMContext):
+    await message.answer("Xabar matnini yuboring:", reply_markup=ReplyKeyboardRemove())
+    await state.set_state(AdminStates.waiting_broadcast_msg)
+
+
+@dp.message(AdminStates.waiting_broadcast_msg)
+async def send_broadcast(message: types.Message, state: FSMContext):
+    users = execute_query("SELECT telegram_id FROM users", fetchall=True)
+    for u in users:
+        try:
+            await bot.send_message(u[0], message.text)
+            await asyncio.sleep(0.05)
+        except:
+            continue
+    await message.answer("✅ Yuborildi", reply_markup=get_admin_menu())
+    await state.clear()
+
+
+@dp.message(F.text == "➕ Kurs qo'shish", F.from_user.id == ADMIN_ID)
+async def add_c(message: types.Message, state: FSMContext):
+    await message.answer("Kurs nomi:", reply_markup=ReplyKeyboardRemove())
+    await state.set_state(AdminStates.waiting_course_name)
+
+
+@dp.message(AdminStates.waiting_course_name)
+async def add_c_n(message: types.Message, state: FSMContext):
+    await state.update_data(n=message.text)
+    await message.answer("Kurs haqida:")
+    await state.set_state(AdminStates.waiting_course_desc)
+
+
+@dp.message(AdminStates.waiting_course_desc)
+async def add_c_f(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    try:
+        execute_query("INSERT INTO courses (name, description) VALUES (?, ?)", (data['n'], message.text))
+        await message.answer("✅ Qo'shildi", reply_markup=get_admin_menu())
+    except:
+        await message.answer("❌ Xato (balki kurs allaqachon mavjuddir)", reply_markup=get_admin_menu())
+    await state.clear()
+
+
+@dp.message(F.text.in_([TEXTS['uz']['faq'], TEXTS['kz']['faq']]))
+async def faq(message: types.Message):
+    user = execute_query("SELECT lang FROM users WHERE telegram_id=?", (message.from_user.id,), fetchone=True)
+    lang = user[0] if user else 'uz'
+    await message.answer(TEXTS[lang]['faq_ans'])
+
+
+@dp.message(F.text.in_([TEXTS['uz']['contact'], TEXTS['kz']['contact']]))
+async def contact(message: types.Message):
+    user = execute_query("SELECT lang FROM users WHERE telegram_id=?", (message.from_user.id,), fetchone=True)
+    lang = user[0] if user else 'uz'
+    await message.answer(TEXTS[lang]['contact_us'])
+
 
 async def main():
     db_init()
