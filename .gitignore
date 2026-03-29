@@ -1,11 +1,5 @@
-venv/
-venv
-.venv
-
-idea/
-.idea
-idea
-
-.env/
 .env
-env/
+venv/
+__pycache__/
+*.db
+users_list.xlsx
