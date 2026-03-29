@@ -346,6 +346,8 @@ async def contact(message: types.Message):
 
 async def main():
     db_init()
+    # Botni ishga tushirishdan oldin eski xabarlarni tozalash
+    await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
 
